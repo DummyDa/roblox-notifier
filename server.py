@@ -1,53 +1,75 @@
 import asyncio
+import json
 import websockets
 import disnake
 from disnake.ext import commands
-import json
 
+connected = {}  # websocket -> user info
 
+async def get_connected_clients():
+    """Возвращает список всех подключённых клиентов."""
+    return list(connected.values())
 
-connected = set()  # WebSocket клиенты
+# ---------- WebSocket ---------- #
 
-
-# --- WebSocket --- #
-async def handle_client(websocket):
-    connected.add(websocket)
-    try:
-        await websocket.wait_closed()
-    finally:
-        connected.remove(websocket)
-
-
-async def send_to_clients(data):
+async def send_to_all(data: str):
     if not connected:
         return
-    disconnected_clients = []
-    for client in connected:
+
+    for client in list(connected):
         try:
+            print(data)
             await client.send(data)
         except (websockets.ConnectionClosed, ConnectionResetError):
-            disconnected_clients.append(client)
-    for client in disconnected_clients:
-        connected.discard(client)
+            connected.pop(client, None)
 
+async def handle_client(websocket):
+    user = "unknown"  # <-- гарантируем, что переменная всегда определена
+    try:
+        raw = await websocket.recv()
+        hello = json.loads(raw)
+        user = hello.get("user", "unknown")
 
-# --- Disnake Bot --- #
+        connected[websocket] = {"user": user}
+        print(f"🔌 WS connected: {user}")
+        print("Connected clients:", connected)
+
+        clients = list(connected.values())
+        await send_to_all(json.dumps({"type": "clients_list", "data": clients}))
+
+        while True:
+            msg = await websocket.recv()
+            print(f"Received from {user}: {msg}")
+
+    except websockets.ConnectionClosed as e:
+        print(f"WS closed: {user} ({e.code} - {e.reason})")
+    except Exception as e:
+        print("WS error:", e)
+    finally:
+        connected.pop(websocket, None)
+        print(f"❌ WS disconnected: {user}")
+
+# ---------- Discord Bot ---------- #
 intents = disnake.Intents.default()
 intents.guilds = True
 intents.messages = True
-intents.message_content = True  # обязательно для чтения текста сообщений
-
+intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 
 @bot.event
 async def on_ready():
-    print(f"Bot connected as {bot.user}")
+    print(f"🤖 Bot logged in as {bot.user}")
 
 
 @bot.event
 async def on_message(message):
-    if message.channel.id not in [1449454381404520682, 1449453871633268957, 1446564111298203780]:
+    if message.channel.id not in [
+        1449454381404520682,
+        1449453871633268957,
+        1446564111298203780,
+        1446564138720690348,
+    ]:
         return
 
     print(f"Message in: {message.channel.name}")
@@ -74,18 +96,17 @@ async def on_message(message):
             data = {"jobid": jobid, "money": money, "name": name, "joiner": joiner}
             print(data)
             json_data = json.dumps(data)
-            await send_to_clients(json_data)
+            await send_to_all(json_data)
 
 
-# --- Main --- #
+# ---------- Main ---------- #
 async def main():
-    bot_token = (
-        "token"
-    )
     async with websockets.serve(handle_client, "0.0.0.0", 8765):
-        print("WebSocket ws://0.0.0.0:8765")
-        await bot.start(bot_token)
+        print("🌐 WebSocket started")
+
+        await bot.start(
+            ".Gc28k2.LE9tiEQ7GxioO0hq5GgNuPrOszb0iO2NtJCNhQ"
+        )
 
 
-if __name__ == "__main__":
-    asyncio.run(main())
+asyncio.run(main())
